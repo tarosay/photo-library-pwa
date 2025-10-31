@@ -1,0 +1,24 @@
+<!doctype html><html lang="ja"><meta charset="utf-8">
+<link rel="manifest" href="./manifest.webmanifest">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Photo Library Uploader</title>
+<button id="pick">写真ライブラリから選ぶ</button>
+<div id="guide" hidden>
+  <p>初回はショートカットを追加してください。</p>
+  <a href="https://www.icloud.com/shortcuts/XXXXXXXX" target="_blank" rel="noopener">ショートカットを追加</a>
+</div>
+<script>
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./service-worker.js');
+
+const btn=document.getElementById('pick'), guide=document.getElementById('guide');
+const url=new URL(location.href);
+if (url.searchParams.get('ok')==='1'){ history.replaceState(null,'',location.pathname); alert('アップロード処理を受け付けました。'); }
+
+btn.addEventListener('click', ()=>{
+  const back=encodeURIComponent(`${location.origin}${location.pathname}?ok=1`);
+  const t=Date.now();
+  location.href=`shortcuts://run-shortcut?name=SelectPhoto&x-success=${back}`;
+  setTimeout(()=>{ if (Date.now()-t>7000 && location.search.indexOf('ok=1')===-1) guide.hidden=false; },7000);
+});
+</script>
+</html>

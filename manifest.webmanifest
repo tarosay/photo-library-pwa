@@ -1,0 +1,12 @@
+{
+  "name": "Photo Library Uploader",
+  "short_name": "PhotoUp",
+  "start_url": "/photo-library-pwa/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    { "src": "/photo-library-pwa/icons/192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/photo-library-pwa/icons/512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
