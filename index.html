@@ -5,45 +5,93 @@
     <link rel="manifest" href="./manifest.webmanifest">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Photo Library Uploader</title>
+    <meta name="apple-mobile-web-app-capable" content="yes">
 </head>
 <body>
 <button id="pick">写真ライブラリから選ぶ</button>
 <div id="guide" hidden>
-    <p>初回はショートカットを追加してください。</p>
-    <a id="shortcut-link" href="https://www.icloud.com/shortcuts/3a350e15a025402d80d1ff7ffac18853" target="_blank" rel="noopener noreferrer">ショートカットを追加</a>
+    <p>初回はショートカットを追加してください。追加後はこのページに戻ると自動的に実行を再試行します。</p>
+    <p><a id="shortcut-link" href="https://www.icloud.com/shortcuts/3a350e15a025402d80d1ff7ffac18853" target="_blank" rel="noopener noreferrer">ショートカットを追加</a></p>
+    <p><button id="retry" type="button">ショートカットを再実行</button></p>
 </div>
-
 
 <!-- 追加ここから -->
 <img src="./QR_942906.png" alt="QRコード" style="width:300px;height:auto;display:block;margin:40px auto;">
 <!-- 追加ここまで -->
 
 <script>
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('./service-worker.js');
+(function(){
+    if ('serviceWorker' in navigator) try { navigator.serviceWorker.register('./service-worker.js'); } catch(e){}
 
-    const btn = document.getElementById('pick'), guide = document.getElementById('guide');
+    const btn = document.getElementById('pick');
+    const guide = document.getElementById('guide');
+    const retryBtn = document.getElementById('retry');
     const shortcutLink = document.getElementById('shortcut-link');
+
     const SHORTCUT_URL = 'https://www.icloud.com/shortcuts/3a350e15a025402d80d1ff7ffac18853';
+    const SHORTCUT_SCHEME = 'shortcuts://run-shortcut?name=%E6%92%AE%E5%BD%B1%E7%94%BB%E5%83%8F%E3%81%AE%E9%81%B8%E6%8A%9E';
+    const RETRY_KEY = 'shortcutRetryCount';
+    const MAX_RETRY = 2; // 自動再試行は最大2回まで（無限ループ防止）
+    const FALLBACK_MS = 5000; // Shortcuts起動の判定待ち
+
     shortcutLink.href = SHORTCUT_URL;
+
+    // x-successで戻ってきたら受け付けメッセージを表示して、再試行フラグをクリア
     const url = new URL(location.href);
-    if (url.searchParams.get('ok') === '1') { history.replaceState(null, '', location.pathname); alert('アップロード処理を受け付けました。'); }
+    if (url.searchParams.get('ok') === '1') {
+        history.replaceState(null, '', location.pathname);
+        try { localStorage.removeItem(RETRY_KEY); } catch(e){}
+        alert('アップロード処理を受け付けました。');
+    }
 
-    btn.addEventListener('click', () => {
+    function buildShortcutURL(){
         const back = encodeURIComponent(`${location.origin}${location.pathname}?ok=1`);
-        const t = Date.now();
-        const target = `shortcuts://run-shortcut?name=%E6%92%AE%E5%BD%B1%E7%94%BB%E5%83%8F%E3%81%AE%E9%81%B8%E6%8A%9E&x-success=${back}`;
-        location.href = target;
-        setTimeout(() => {
-            const shouldFallback = Date.now() - t > 7000 && location.search.indexOf('ok=1') === -1;
-            if (!shouldFallback) return;
-            guide.hidden = false;
-            if (!guide.dataset.opened) {
-                guide.dataset.opened = '1';
-                location.href = SHORTCUT_URL;
-            }
-        }, 7000);
-    });
-</script>
+        return `${SHORTCUT_SCHEME}&x-success=${back}`;
+    }
 
+    function showGuideAndOpenAdd(){
+        guide.hidden = false;
+        if (!guide.dataset.opened) {
+            guide.dataset.opened = '1';
+            // 次回復帰時に自動再実行するためのカウンタを増やす
+            try {
+                const n = Number(localStorage.getItem(RETRY_KEY) || '0');
+                if (n < MAX_RETRY) localStorage.setItem(RETRY_KEY, String(n + 1));
+            } catch(e){}
+            // iCloudの「ショートカットを追加」へ遷移
+            location.href = SHORTCUT_URL;
+        }
+    }
+
+    function runShortcutWithFallback(){
+        const start = Date.now();
+        location.href = buildShortcutURL();
+        // Shortcutsに切り替わらず、x-successで戻って来てもいない場合は案内を出して追加ページへ
+        setTimeout(() => {
+            const stillHere = Date.now() - start > FALLBACK_MS && location.search.indexOf('ok=') === -1;
+            if (stillHere) showGuideAndOpenAdd();
+        }, FALLBACK_MS);
+    }
+
+    function maybeRetryAfterAdd(){
+        // iCloudから戻ったタイミング（pageshow/visibilitychange）で自動再実行
+        try {
+            const n = Number(localStorage.getItem(RETRY_KEY) || '0');
+            if (n > 0 && location.search.indexOf('ok=') === -1) {
+                localStorage.setItem(RETRY_KEY, String(n - 1));
+                // 少し待ってから再実行（戻り直後の描画安定待ち）
+                setTimeout(runShortcutWithFallback, 400);
+            }
+        } catch(e){}
+    }
+
+    btn.addEventListener('click', runShortcutWithFallback);
+    retryBtn.addEventListener('click', runShortcutWithFallback);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') maybeRetryAfterAdd();
+    });
+    window.addEventListener('pageshow', maybeRetryAfterAdd, { once: false });
+})();
+</script>
 </body>
 </html>
