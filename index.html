@@ -31,7 +31,7 @@
     btn.addEventListener('click', () => {
         const back = encodeURIComponent(`${location.origin}${location.pathname}?ok=1`);
         const t = Date.now();
-        location.href = `shortcuts://run-shortcut?name=SelectPhoto&x-success=${back}`;
+        location.href = `shortcuts://run-shortcut?name=%E6%92%AE%E5%BD%B1%E7%94%BB%E5%83%8F%E3%81%AE%E9%81%B8%E6%8A%9E&x-success=${back}`;
         setTimeout(() => { if (Date.now() - t > 7000 && location.search.indexOf('ok=1') === -1) guide.hidden = false; }, 7000);
     });
 </script>
