@@ -37,9 +37,13 @@
 
     <!-- ② 実行ボタン（導入済み向けUI） -->
     <div id="runner" class="hidden">
-      <button id="pick">写真ライブラリから選ぶ</button>
+      <button id="pick">写真ライブラリから選ぶ（ショートカット）</button>
+<div style="margin-top:12px"></div>
+<button id="directUpload" class="secondary">画像ファイルを選んで直接アップロード（HTTP POST）</button>
+<input id="fileInput" type="file" accept="image/jpeg" class="hidden">
       <a id="backChoice" href="#" class="btn ghost">← 選択に戻る</a>
       <div><small id="installedBadge" class="muted"></small></div>
+<div><small id="status" class="muted"></small></div>
     </div>
 
     <!-- ③ ガイド（未導入向け案内 + 取得動線） -->
