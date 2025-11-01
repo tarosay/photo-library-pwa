@@ -10,7 +10,7 @@
 <button id="pick">写真ライブラリから選ぶ</button>
 <div id="guide" hidden>
     <p>初回はショートカットを追加してください。</p>
-    <a href="https://www.icloud.com/shortcuts/3a350e15a025402d80d1ff7ffac18853" target="_blank" rel="noopener">ショートカットを追加</a>
+    <a id="shortcut-link" href="https://www.icloud.com/shortcuts/3a350e15a025402d80d1ff7ffac18853" target="_blank" rel="noopener noreferrer">ショートカットを追加</a>
 </div>
 
 
@@ -22,6 +22,9 @@
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./service-worker.js');
 
     const btn = document.getElementById('pick'), guide = document.getElementById('guide');
+    const shortcutLink = document.getElementById('shortcut-link');
+    const SHORTCUT_URL = 'https://www.icloud.com/shortcuts/3a350e15a025402d80d1ff7ffac18853';
+    shortcutLink.href = SHORTCUT_URL;
     const url = new URL(location.href);
     if (url.searchParams.get('ok') === '1') { history.replaceState(null, '', location.pathname); alert('アップロード処理を受け付けました。'); }
 
