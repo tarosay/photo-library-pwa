@@ -1,5 +1,5 @@
 {
-  "name": "Photo Library Uploader",
+  "name": "Camera Photo Uploader",
   "short_name": "PhotoUp",
   "start_url": "/photo-library-pwa/",
   "display": "standalone",
