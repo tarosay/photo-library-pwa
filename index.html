@@ -3,36 +3,51 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Camera EXIF チェッカー</title>
+  <title>HEIC → JPEG 変換（EXIF継承）</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;margin:0;padding:24px;background:#fafafa;color:#111}
     h1{font-size:20px;margin:0 0 12px}
-    .card{background:#fff;border-radius:16px;box-shadow:0 4px 16px rgba(0,0,0,.06);padding:20px;margin:12px auto;max-width:700px}
+    .card{background:#fff;border-radius:16px;box-shadow:0 4px 16px rgba(0,0,0,.06);padding:20px;margin:12px auto;max-width:780px}
     button{appearance:none;border:0;border-radius:12px;padding:14px 16px;font-size:16px;cursor:pointer;background:#111;color:#fff}
-    small{color:#666}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .muted{color:#666}
     img.qr{width:280px;height:auto;display:block;margin:24px auto 0}
+    pre{background:#f6f6f6;border-radius:10px;padding:10px;overflow:auto}
+    .hidden{display:none !important}
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>カメラ撮影 → EXIF確認</h1>
-    <p class="muted">Safari 18.4 以降 または対応ブラウザで動作します。</p>
+    <h1>HEIC → JPEG 変換（EXIF継承）</h1>
+    <p class="muted">「カメラで撮影」を押すと <code>takePhoto()</code> で撮影し、HEICならJPEGに変換した上で EXIF（ISO / F値 / シャッター 等）を書き戻して保存します。</p>
 
-    <button id="takePhoto">カメラで撮影（ブラウザ）</button>
+    <div class="row">
+      <button id="takePhoto">カメラで撮影 → 変換＆保存</button>
+    </div>
+
     <video id="camPreview" autoplay playsinline muted style="width:0;height:0"></video>
-    <div><small id="status" class="muted"></small></div>
+    <p class="muted" id="status"></p>
 
-    <!-- ✅ QRコードは残します -->
+    <details>
+      <summary>EXIF 検出結果（撮影直後に表示）</summary>
+      <pre id="exifDump">{}</pre>
+    </details>
+
+    <!-- ✅ QRコードは維持 -->
     <img class="qr" src="./QR_942906.png" alt="QRコード">
   </div>
 
-  <!-- ▼▼ JavaScript（HEIC対応exifr使用） -->
+  <!-- piexifjs は UMD（グローバル）なので module の前に読み込む -->
+  <script src="https://cdn.jsdelivr.net/npm/piexifjs"></script>
+
   <script type="module">
+    // HEIC読取: exifr は HEIC 対応の full 版を使用
     import exifr from 'https://cdn.jsdelivr.net/npm/exifr/dist/full.esm.js';
 
     const takeBtn  = document.getElementById('takePhoto');
     const videoEl  = document.getElementById('camPreview');
     const statusEl = document.getElementById('status');
+    const exifDump = document.getElementById('exifDump');
 
     function stopStream(){
       try{
@@ -42,7 +57,108 @@
       }catch(e){}
     }
 
-    takeBtn.addEventListener('click', async () => {
+    function dataURLtoBlob(dataURL){
+      const [header, data] = dataURL.split(',');
+      const mime = header.match(/data:(.*?);base64/)[1];
+      const bin  = atob(data);
+      const len  = bin.length;
+      const buf  = new Uint8Array(len);
+      for(let i=0;i<len;i++) buf[i] = bin.charCodeAt(i);
+      return new Blob([buf], {type: mime});
+    }
+
+    // piexif 用の rational 変換
+    function toRational(num){
+      if (typeof num !== 'number' || !isFinite(num)) return undefined;
+      const denom = 10000;
+      return [Math.round(num * denom), denom];
+    }
+    function toExposureRational(sec){
+      // 露出時間 例: 0.0167 ⇒ 1/60 に近い分数へ
+      if (typeof sec !== 'number' || sec <= 0) return undefined;
+      const denom = Math.round(1/sec);
+      return [1, Math.max(1, denom)];
+    }
+    function formatExifDate(dt){
+      // exifr の Date は Date型または文字列の可能性
+      const d = (dt instanceof Date) ? dt : (dt ? new Date(dt) : null);
+      if (!d || isNaN(d.getTime())) return undefined;
+      const pad = n => String(n).padStart(2,'0');
+      return `${d.getFullYear()}:${pad(d.getMonth()+1)}:${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    async function heicToJpegWithExif(heicBlob, tags){
+      // 1) HEIC を bitmap に展開して canvas → JPEG にエンコード（この時点では EXIF なし）
+      const bmp   = await createImageBitmap(heicBlob);
+      const cvs   = document.createElement('canvas');
+      cvs.width   = bmp.width;
+      cvs.height  = bmp.height;
+      const ctx   = cvs.getContext('2d');
+      ctx.drawImage(bmp, 0, 0);
+      const quality = 0.92;
+      const jpegDataURL = cvs.toDataURL('image/jpeg', quality);
+
+      // 2) 元の HEIC から読んだ EXIF を piexif で書き戻す
+      //    - ここでは使用頻度の高い項目を中心に再構成（必要に応じて拡張可能）
+      const zeroth = {};
+      const exifIFD = {};
+      const gpsIFD = {};
+
+      if (tags?.Make)  zeroth[piexif.ImageIFD.Make]  = String(tags.Make);
+      if (tags?.Model) zeroth[piexif.ImageIFD.Model] = String(tags.Model);
+      // Orientation はブラウザ側で描画済みのため通常 1 を入れておく
+      zeroth[piexif.ImageIFD.Orientation] = 1;
+
+      // 撮影日時
+      const dto = formatExifDate(tags?.DateTimeOriginal || tags?.CreateDate || tags?.ModifyDate);
+      if (dto) exifIFD[piexif.ExifIFD.DateTimeOriginal] = dto;
+
+      // 露出三要素
+      // ISO（新タグ PhotographicSensitivity が来る場合がある）
+      const iso = tags?.ISO ?? tags?.PhotographicSensitivity;
+      if (typeof iso === 'number') {
+        // old tag
+        exifIFD[piexif.ExifIFD.ISOSpeedRatings] = iso;
+        // new tagが必要なら: exifIFD[piexif.ExifIFD.PhotographicSensitivity] = iso; // piexifに無い実装もある
+      }
+      // F値
+      if (typeof tags?.FNumber === 'number') {
+        exifIFD[piexif.ExifIFD.FNumber] = toRational(tags.FNumber);
+      }
+      // 露出時間
+      if (typeof tags?.ExposureTime === 'number') {
+        exifIFD[piexif.ExifIFD.ExposureTime] = toExposureRational(tags.ExposureTime);
+      }
+
+      // レンズ/焦点距離など任意
+      if (typeof tags?.FocalLength === 'number') {
+        exifIFD[piexif.ExifIFD.FocalLength] = toRational(tags.FocalLength);
+      }
+      if (tags?.LensModel) {
+        exifIFD[piexif.ExifIFD.LensModel] = String(tags.LensModel);
+      }
+
+      // 必要ならGPSも復元（例）
+      if (tags?.latitude && tags?.longitude) {
+        const toGPS = (v)=> {
+          const deg = Math.floor(v);
+          const minF = (v - deg) * 60;
+          const min = Math.floor(minF);
+          const sec = (minF - min) * 60;
+          return [toRational(deg), toRational(min), toRational(sec)];
+        };
+        gpsIFD[piexif.GPSIFD.GPSLatitudeRef]  = tags.latitude  >= 0 ? 'N' : 'S';
+        gpsIFD[piexif.GPSIFD.GPSLongitudeRef] = tags.longitude >= 0 ? 'E' : 'W';
+        gpsIFD[piexif.GPSIFD.GPSLatitude]  = toGPS(Math.abs(tags.latitude));
+        gpsIFD[piexif.GPSIFD.GPSLongitude] = toGPS(Math.abs(tags.longitude));
+      }
+
+      const exifBytes = piexif.dump({ "0th": zeroth, "Exif": exifIFD, "GPS": gpsIFD });
+      const withExifDataURL = piexif.insert(exifBytes, jpegDataURL);
+      return dataURLtoBlob(withExifDataURL);
+    }
+
+    async function handleShot(){
       if (!('mediaDevices' in navigator) || !navigator.mediaDevices.getUserMedia) {
         statusEl.textContent = '❌ このブラウザはカメラAPIに未対応です。';
         return;
@@ -65,37 +181,60 @@
         const ic = new ImageCapture(track);
 
         statusEl.textContent = '撮影中…';
-        const blob = await ic.takePhoto();   // ← ★撮影ここ
+        const heicOrJpegBlob = await ic.takePhoto();
 
-        const mime = blob.type || '(不明)';
-        console.log('撮影画像 MIME:', mime, 'サイズ:', blob.size);
+        const mime = heicOrJpegBlob.type || '(不明)';
+        const size = heicOrJpegBlob.size;
+        console.log('撮影Blob:', mime, size);
 
-        // EXIFを解析して ISO / F値 / シャッター速度 の有無を確認
-        const tags = await exifr.parse(blob, ['ISO','PhotographicSensitivity','FNumber','ExposureTime']);
+        // まず元EXIFを読む（HEICでもOK）
+        const tags = await exifr.parse(heicOrJpegBlob, [
+          'ISO','PhotographicSensitivity','FNumber','ExposureTime',
+          'Make','Model','LensModel','FocalLength',
+          'DateTimeOriginal','CreateDate','ModifyDate',
+          'latitude','longitude'
+        ]);
+        exifDump.textContent = JSON.stringify(tags || {}, null, 2);
+
+        let outBlob;
+        if (/image\/heic|image\/heif/i.test(mime)) {
+          statusEl.textContent = 'HEIC を JPEG に変換中…（EXIF書き戻し）';
+          outBlob = await heicToJpegWithExif(heicOrJpegBlob, tags);
+        } else if (/image\/jpeg/i.test(mime)) {
+          statusEl.textContent = 'JPEG でした。EXIFを保持したまま保存します。';
+          // JPEGの場合でも、必要なら一度 load→dump→insert で追記/正規化できる
+          // ここではオリジナルをそのままダウンロード
+          outBlob = heicOrJpegBlob;
+        } else {
+          statusEl.textContent = `想定外の形式: ${mime}。JPEGとして再エンコードします（EXIFは最小限）。`;
+          outBlob = await heicToJpegWithExif(heicOrJpegBlob, tags);
+        }
+
+        // ダウンロード
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(outBlob);
+        a.download = `photo-${Date.now()}.jpg`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+
+        // 主要三要素の有無を表示
         const iso = tags?.ISO ?? tags?.PhotographicSensitivity ?? null;
         const f   = tags?.FNumber ?? null;
         const t   = tags?.ExposureTime ?? null;
+        const tStr = (typeof t === 'number' && t>0)
+          ? ( (1/ t)>=2 ? `1/${Math.round(1/t)} (${t})` : `${t}` )
+          : (typeof t === 'string' ? t : '—');
 
-        let tStr = '—';
-        if (typeof t === 'number' && t > 0) {
-          const denom = Math.round(1 / t);
-          tStr = (denom >= 2) ? `1/${denom} (${t})` : `${t}`;
-        } else if (typeof t === 'string') {
-          tStr = t;
-        }
-
-        if (iso || f || t) {
-          statusEl.textContent = `✅ EXIFあり：ISO=${iso ?? '—'} / F=${f ?? '—'} / シャッター=${tStr}`;
-        } else {
-          statusEl.textContent = '❌ EXIFに ISO・F値・シャッタースピード が見つかりませんでした。';
-        }
+        statusEl.textContent = `完了 ✅ 変換＆保存 / EXIF: ISO=${iso ?? '—'} / F=${f ?? '—'} / シャッター=${tStr}`;
       } catch (err) {
-        statusEl.textContent = `撮影エラー: ${err?.message || err}`;
+        console.error(err);
+        statusEl.textContent = `エラー: ${err?.message || err}`;
       } finally {
         stopStream();
       }
-    });
+    }
+
+    takeBtn.addEventListener('click', handleShot);
   </script>
-  <!-- ▲▲ ここまで -->
 </body>
 </html>
