@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Camera EXIF チェッカー（保存改善版）</title>
+  <title>Camera EXIF チェッカー（YYYYMMDDhhmmss 命名版）</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;margin:0;padding:24px;background:#fafafa;color:#111}
     h1{font-size:20px;margin:0 0 12px}
@@ -18,8 +18,8 @@
 </head>
 <body>
   <div class="card">
-    <h1>カメラ撮影 → EXIF確認 & 保存</h1>
-    <p class="muted">Safari 18.4+ 推奨。撮影後、まず共有シートで保存を試み、不可ならダウンロードリンクを表示します。</p>
+    <h1>カメラ撮影 → EXIF確認 & 保存（YYYYMMDDhhmmss.jpg）</h1>
+    <p class="muted">Safari 18.4+ 推奨。撮影後、共有シートで保存を試み、不可なら「タップして保存」リンクを表示します。</p>
 
     <button id="takePhoto">カメラで撮影</button>
     <video id="camPreview" autoplay playsinline muted style="width:0;height:0"></video>
@@ -30,17 +30,18 @@
       <pre id="exifDump">{}</pre>
     </details>
 
-    <!-- 共有不可・自動DL不可の時に表示する手動保存リンク -->
-    <a id="manualSave" class="btn hidden" download="photo.jpg">ここをタップして保存</a>
+    <!-- 共有不可・自動DL不可時の手動保存リンク -->
+    <a id="manualSave" class="btn hidden" download="image.jpg">ここをタップして保存</a>
 
-    <!-- ✅ QRコードはそのまま -->
+    <!-- ✅ QRコードは維持 -->
     <img class="qr" src="./QR_942906.png" alt="QRコード">
   </div>
 
-  <!-- EXIF書き戻し用（UMD） -->
+  <!-- EXIF 書き戻し（UMD）：module の前に読み込む -->
   <script src="https://cdn.jsdelivr.net/npm/piexifjs"></script>
 
   <script type="module">
+    // HEIC対応の exifr フル版
     import exifr from 'https://cdn.jsdelivr.net/npm/exifr/dist/full.esm.js';
 
     const takeBtn   = document.getElementById('takePhoto');
@@ -48,6 +49,10 @@
     const statusEl  = document.getElementById('status');
     const exifDump  = document.getElementById('exifDump');
     const manualA   = document.getElementById('manualSave');
+
+    // ---（任意）POST 送信先を使う場合はURLを入れて true に ---
+    const USE_POST = false;
+    const ENDPOINT = "https://ik1-127-70116.vs.sakura.ne.jp/markAnomaly"; // 使うときだけ有効化
 
     function stopStream(){
       try {
@@ -66,6 +71,7 @@
       return new Blob([buf], {type: mime});
     }
 
+    // EXIF rational
     function toRational(num){
       if (typeof num !== 'number' || !isFinite(num)) return undefined;
       const d = 10000; return [Math.round(num * d), d];
@@ -81,7 +87,17 @@
       return `${d.getFullYear()}:${pad(d.getMonth()+1)}:${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
     }
 
+    // ファイル名：YYYYMMDDhhmmss.jpg（EXIF DateTimeOriginal があれば優先）
+    function makeTimestampFilenameFrom(dateMaybe){
+      const d = (dateMaybe instanceof Date) ? dateMaybe
+              : (dateMaybe ? new Date(dateMaybe) : new Date());
+      const pad = n => String(n).padStart(2,'0');
+      const name = `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.jpg`;
+      return name;
+    }
+
     async function heicToJpegWithExif(heicBlob, tags){
+      // HEIC→bitmap→Canvas→JPEG（EXIF無し）
       const bmp   = await createImageBitmap(heicBlob);
       const cvs   = document.createElement('canvas');
       cvs.width   = bmp.width;
@@ -90,6 +106,7 @@
       const quality = 0.92;
       const jpegDataURL = cvs.toDataURL('image/jpeg', quality);
 
+      // 必要EXIFを書き戻し
       const zeroth = {};
       const exifIFD = {};
       const gpsIFD = {};
@@ -129,11 +146,11 @@
     }
 
     async function saveFilePreferShare(blob, filename){
-      // 1) 共有シート（iOS Safariで “写真に保存 / ファイルに保存” が選べる）
+      // 1) 共有シート（iOS Safariなら写真/ファイル保存が可能）
       try {
         const file = new File([blob], filename, { type: blob.type || 'image/jpeg' });
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({ files: [file], title: 'Photo', text: '保存先を選んでください' });
+          await navigator.share({ files: [file], title: filename, text: '保存先を選んでください' });
           statusEl.textContent = '共有シートから保存しました。';
           return true;
         }
@@ -141,14 +158,24 @@
         console.log('share error', e);
       }
 
-      // 2) フォールバック: ダウンロードリンクを生成して画面に表示（自動クリックは避ける）
+      // 2) フォールバック: タップ保存リンクを画面に出す
       const url = URL.createObjectURL(blob);
       manualA.href = url;
       manualA.download = filename;
+      manualA.textContent = `ここをタップして保存（${filename}）`;
       manualA.classList.remove('hidden');
       statusEl.textContent = '「ここをタップして保存」リンクから保存してください。';
-      // URL.revokeObjectURL はユーザー保存後で。ここでは解除しないでおく。
       return false;
+    }
+
+    async function maybePost(blob, filename){
+      if (!USE_POST) return;
+      const fd = new FormData();
+      fd.append('image', new File([blob], filename, { type: blob.type || 'image/jpeg' }));
+      // 追加パラメータが必要なら: fd.append('token', 'xxxxx');
+      const res = await fetch(ENDPOINT, { method: 'POST', body: fd });
+      const text = await res.text().catch(()=> '');
+      console.log('POST result:', res.status, text);
     }
 
     async function handleShot(){
@@ -178,8 +205,9 @@
 
         statusEl.textContent = '撮影中…';
         const srcBlob = await ic.takePhoto();
-
         const mime = srcBlob.type || '(不明)';
+
+        // まずEXIF読み
         const tags = await exifr.parse(srcBlob, [
           'ISO','PhotographicSensitivity','FNumber','ExposureTime',
           'Make','Model','LensModel','FocalLength',
@@ -188,30 +216,37 @@
         ]);
         exifDump.textContent = JSON.stringify(tags || {}, null, 2);
 
+        // 出力画像の生成（HEICなら変換＋EXIF書戻し）
         let outBlob;
         if (/image\/heic|image\/heif/i.test(mime)) {
-          statusEl.textContent = 'HEIC → JPEG へ変換中（EXIF書き戻し）…';
+          statusEl.textContent = 'HEIC → JPEG 変換中（EXIF書き戻し）…';
           outBlob = await heicToJpegWithExif(srcBlob, tags);
         } else if (/image\/jpeg/i.test(mime)) {
-          // そのまま保存
-          outBlob = srcBlob;
+          outBlob = srcBlob; // JPEGはそのまま
         } else {
           statusEl.textContent = `想定外の形式(${mime}) → JPEG再エンコード（EXIF最小限）…`;
           outBlob = await heicToJpegWithExif(srcBlob, tags);
         }
 
-        const ok = await saveFilePreferShare(outBlob, `photo-${Date.now()}.jpg`);
-        if (ok) {
-          const iso = tags?.ISO ?? tags?.PhotographicSensitivity ?? null;
-          const f   = tags?.FNumber ?? null;
-          const t   = tags?.ExposureTime ?? null;
-          const tStr = (typeof t === 'number' && t>0)
-            ? ( (1/ t)>=2 ? `1/${Math.round(1/t)} (${t})` : `${t}` )
-            : (typeof t === 'string' ? t : '—');
-          statusEl.textContent = `完了 ✅ / EXIF: ISO=${iso ?? '—'} / F=${f ?? '—'} / シャッター=${tStr}`;
-        } else {
-          // 手動リンクを表示済み
-        }
+        // ファイル名：EXIFの撮影日時優先、無ければ現在時刻
+        const exifDate = (tags && (tags.DateTimeOriginal || tags.CreateDate || tags.ModifyDate)) || null;
+        const filename = makeTimestampFilenameFrom(exifDate);
+
+        // 共有保存（不可ならタップリンク表示）
+        await saveFilePreferShare(outBlob, filename);
+
+        // （任意）POST
+        await maybePost(outBlob, filename);
+
+        // 主要三要素の表示
+        const iso = tags?.ISO ?? tags?.PhotographicSensitivity ?? null;
+        const f   = tags?.FNumber ?? null;
+        const t   = tags?.ExposureTime ?? null;
+        const tStr = (typeof t === 'number' && t>0)
+          ? ( (1/ t)>=2 ? `1/${Math.round(1/t)} (${t})` : `${t}` )
+          : (typeof t === 'string' ? t : '—');
+
+        statusEl.textContent = `完了 ✅  ${filename} / EXIF: ISO=${iso ?? '—'} / F=${f ?? '—'} / シャッター=${tStr}`;
       } catch (err) {
         console.error(err);
         statusEl.textContent = `エラー: ${err?.message || err}`;
