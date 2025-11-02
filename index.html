@@ -3,23 +3,26 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Photo Capture (EXIF確認)</title>
-  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Camera EXIF チェッカー</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;margin:0;padding:24px;background:#fafafa;color:#111}
+    h1{font-size:20px;margin:0 0 12px}
     .card{background:#fff;border-radius:16px;box-shadow:0 4px 16px rgba(0,0,0,.06);padding:20px;margin:12px auto;max-width:700px}
     button{appearance:none;border:0;border-radius:12px;padding:14px 16px;font-size:16px;cursor:pointer;background:#111;color:#fff}
     small{color:#666}
+    img.qr{width:280px;height:auto;display:block;margin:24px auto 0}
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>ブラウザで撮影してEXIFを確認</h1>
-    <p class="muted">ISO・F値・シャッタースピードがEXIFに含まれているかチェックします。</p>
+    <h1>カメラ撮影 → EXIF確認</h1>
+    <p class="muted">Safari 18.4+ または対応ブラウザで動作します。</p>
 
-    <button id="takePhoto">カメラで撮影</button>
-    <video id="camPreview" class="hidden" autoplay playsinline muted style="width:0;height:0"></video>
+    <button id="takePhoto">カメラで撮影（ブラウザ）</button>
+    <video id="camPreview" autoplay playsinline muted style="width:0;height:0"></video>
     <div><small id="status" class="muted"></small></div>
+
+    <img class="qr" src="./QR_942906.png" alt="QRコード">
   </div>
 
   <script type="module">
@@ -29,31 +32,30 @@
     const videoEl  = document.getElementById('camPreview');
     const statusEl = document.getElementById('status');
 
-    function stopStream() {
-      try {
+    function stopStream(){
+      try{
         const s = videoEl.srcObject;
         if (s) s.getTracks().forEach(t => t.stop());
         videoEl.srcObject = null;
-      } catch {}
+      }catch(e){}
     }
 
     takeBtn.addEventListener('click', async () => {
       if (!('mediaDevices' in navigator) || !navigator.mediaDevices.getUserMedia) {
-        statusEl.textContent = 'このブラウザはカメラAPIに未対応です。';
+        statusEl.textContent = '❌ このブラウザはカメラAPIに未対応です。';
         return;
       }
       if (typeof ImageCapture === 'undefined') {
-        statusEl.textContent = 'ImageCapture.takePhoto() に未対応のため撮影できません。Safari 18.4+ が必要です。';
+        statusEl.textContent = '❌ ImageCapture.takePhoto() に未対応です。Safari 18.4+ が必要です。';
         return;
       }
 
-      statusEl.textContent = 'カメラ起動中…（ユーザー操作起点・HTTPS必須）';
+      statusEl.textContent = 'カメラ起動中…（HTTPS必須）';
       stopStream();
 
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
-          audio: false
+          video: { facingMode: { ideal: 'environment' } }, audio: false
         });
         videoEl.srcObject = stream;
 
@@ -61,8 +63,9 @@
         const ic = new ImageCapture(track);
 
         statusEl.textContent = '撮影中…';
-        const blob = await ic.takePhoto();   // ← ここが撮影箇所
+        const blob = await ic.takePhoto();   // ← ★撮影ここ
 
+        // EXIFを解析して ISO / F値 / シャッター速度 の有無を確認
         const tags = await exifr.parse(blob, ['ISO','PhotographicSensitivity','FNumber','ExposureTime']);
         const iso = tags?.ISO ?? tags?.PhotographicSensitivity ?? null;
         const f   = tags?.FNumber ?? null;
