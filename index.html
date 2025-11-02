@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>画像アップロード（ライブラリ/カメラ + 手動POST）</title>
+  <title>画像アップロード（EXIF必須・手動POST）</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;margin:0;padding:24px;background:#fafafa;color:#111}
     .card{background:#fff;border-radius:16px;box-shadow:0 4px 16px rgba(0,0,0,.06);padding:20px;margin:12px auto;max-width:780px}
@@ -19,19 +19,23 @@
     .hidden{display:none !important}
     video{width:0;height:0}
     img.qr{width:280px;height:auto;display:block;margin:24px auto 0}
+    code{background:#f6f6f6;border-radius:6px;padding:0 6px}
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>画像アップロード（ライブラリ/カメラ）</h1>
-    <p class="muted">選んだ <strong>JPEG</strong> だけを <strong>POSTボタン</strong> を押した時に送信します。ライブラリは <code>capture</code> なしで開きます。</p>
+    <h1>画像アップロード（ライブラリ/カメラ）— EXIF必須・POSTは手動</h1>
+    <p class="muted">
+      ライブラリ選択で <strong>EXIF（ISO / F値 / シャッター速度）</strong> が無い画像は受け付けません。<br>
+      メニューに「カメラ撮影」が出ても、<strong>EXIFが無ければPOST不可</strong>になります。
+    </p>
 
     <div class="row" role="group" aria-label="入力方法">
-      <!-- ライブラリ：capture を付けない -->
+      <!-- ライブラリ：capture を付けない（= 3択のまま） -->
       <button id="pickFromLibrary" class="secondary">ライブラリから選ぶ</button>
       <input id="libraryInput" type="file" accept="image/jpeg" class="hidden" style="display:none">
 
-      <!-- カメラ：独自実装（HTTPS必須） -->
+      <!-- カメラ：独自実装（HTTPS必須 / Safari 18.4+ 推奨） -->
       <button id="takePhoto">カメラで撮影（ブラウザ）</button>
       <video id="camPreview" autoplay playsinline muted></video>
     </div>
@@ -42,6 +46,7 @@
       <div class="line"><span class="label">選択中ファイル：</span><span id="fileName">（未選択）</span></div>
       <div class="line"><span class="label">MIME：</span><span id="fileType">—</span></div>
       <div class="line"><span class="label">サイズ：</span><span id="fileSize">—</span></div>
+      <div class="line"><span class="label">EXIFチェック：</span><span id="exifInfo" class="muted">—</span></div>
     </div>
 
     <div class="row" style="margin-top:12px">
@@ -51,15 +56,20 @@
 
     <p id="status" class="muted" style="margin-top:12px"></p>
 
-    <!-- ✅ QRコードは残します（iPhone でのアクセス導線用） -->
+    <!-- ✅ QRコードは維持（iPhoneで開く導線） -->
     <img class="qr" src="./QR_942906.png" alt="QRコード">
   </div>
 
+  <!-- EXIF解析（HEIC対応のfull版）。JPEGのみ送る運用でも、EXIFチェックの都合でfullを使っておくと安全 -->
   <script type="module">
+    import exifr from 'https://cdn.jsdelivr.net/npm/exifr/dist/full.esm.js';
+
     // ===== 設定 =====
     const ENDPOINT = "https://ik1-127-70116.vs.sakura.ne.jp/markAnomaly"; // 送信先
-    const FIELD_NAME = "image";                                           // FormData のフィールド名
+    const FIELD_NAME = "image";                                           // FormData フィールド名
     const REQUIRE_JPEG_ONLY = true;                                       // JPEGのみ送信
+    // EXIF 必須ポリシー：true=3要素のうち「いずれか1つでもあればOK」、false=3要素すべて必須
+    const ANY_ONE_OF_THREE_OK = true;
 
     // ===== 要素参照 =====
     const pickBtn   = document.getElementById('pickFromLibrary');
@@ -71,30 +81,22 @@
     const fileNameEl= document.getElementById('fileName');
     const fileTypeEl= document.getElementById('fileType');
     const fileSizeEl= document.getElementById('fileSize');
+    const exifInfoEl= document.getElementById('exifInfo');
     const statusEl  = document.getElementById('status');
 
     // ===== 状態 =====
-    /** @type {File|null} */
-    let currentFile = null;
+    /** @type {File|null} */ let currentFile = null;
 
     // ===== ユーティリティ =====
-    function setStatus(msg, type='') {
-      statusEl.className = type ? type : 'muted';
-      statusEl.textContent = msg;
-    }
+    function setStatus(msg, type=''){ statusEl.className = type || 'muted'; statusEl.textContent = msg; }
     function bytes(n){ return (n==null)?'—': (n<1024? `${n} B` : n<1024*1024? `${(n/1024).toFixed(1)} KB` : `${(n/1024/1024).toFixed(2)} MB`); }
     function pad(n){ return String(n).padStart(2,'0'); }
-    function yyyymmddhhmmss(d=new Date()){
-      return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-    }
-    function stopStream(){
-      try{ const s = videoEl.srcObject; if(s) s.getTracks().forEach(t=>t.stop()); videoEl.srcObject=null; }catch{}
-    }
+    function yyyymmddhhmmss(d=new Date()){ return `${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`; }
+    function stopStream(){ try{ const s = videoEl.srcObject; if(s) s.getTracks().forEach(t=>t.stop()); videoEl.srcObject=null; }catch{} }
     function showFileInfo(file){
       fileNameEl.textContent = file?.name ?? '（未選択）';
       fileTypeEl.textContent = file?.type ?? '—';
       fileSizeEl.textContent = file ? bytes(file.size) : '—';
-      postBtn.disabled = !file;
     }
     function requireJPEG(file){
       if (!REQUIRE_JPEG_ONLY) return true;
@@ -102,30 +104,74 @@
       if (!ok) setStatus('❌ JPEG以外は送信できません（HEIC/PNGは不可）。JPEGを選択/撮影してください。', 'error');
       return ok;
     }
+    function hasRequiredExif(tags){
+      // 3要素：ISO / FNumber / ExposureTime
+      const iso = tags?.ISO ?? tags?.PhotographicSensitivity ?? null;
+      const f   = tags?.FNumber ?? null;
+      const t   = tags?.ExposureTime ?? null;
+      if (ANY_ONE_OF_THREE_OK) return !!(iso || f || t);
+      return (iso!=null) && (f!=null) && (t!=null);
+    }
+    function formatExifSummary(tags){
+      const iso = tags?.ISO ?? tags?.PhotographicSensitivity ?? '—';
+      const f   = tags?.FNumber ?? '—';
+      const t   = tags?.ExposureTime;
+      const tStr = (typeof t === 'number' && t>0) ? ((1/t)>=2 ? `1/${Math.round(1/t)} (${t})` : `${t}`) : (typeof t === 'string' ? t : '—');
+      return `ISO=<code>${iso}</code> / F=<code>${f}</code> / シャッター=<code>${tStr}</code>`;
+    }
+
+    async function checkExifOrReject(file){
+      try{
+        const tags = await exifr.parse(file, ['ISO','PhotographicSensitivity','FNumber','ExposureTime']);
+        const ok = hasRequiredExif(tags);
+        exifInfoEl.innerHTML = ok ? `✅ ${formatExifSummary(tags)}` : '❌ 必須EXIFがありません（ISO / F値 / シャッター）';
+        return ok;
+      }catch(err){
+        exifInfoEl.textContent = `EXIF解析エラー: ${err?.message || err}`;
+        return false;
+      }
+    }
+
+    function acceptFileOrBlock(file, sourceLabel){
+      showFileInfo(file);
+      postBtn.disabled = true; // まず無効化
+      exifInfoEl.textContent = 'EXIFを確認中…';
+      setStatus(`${sourceLabel}から画像を取得しました。EXIF確認中…`, 'muted');
+
+      // JPEG以外は即ブロック
+      if (!requireJPEG(file)) {
+        currentFile = null;
+        exifInfoEl.textContent = '—';
+        showFileInfo(null);
+        return;
+      }
+      // EXIFチェック（非同期）
+      checkExifOrReject(file).then(ok => {
+        if (ok) {
+          currentFile = file;
+          postBtn.disabled = false;
+          setStatus(`${sourceLabel}: EXIF OK。POSTボタンで送信できます。`, 'ok');
+        } else {
+          currentFile = null;
+          postBtn.disabled = true;
+          setStatus(`❌ ${sourceLabel}: EXIFが無いため、この画像は受け付けません。ブラウザの「カメラで撮影（独自実装）」をご利用ください。`, 'error');
+        }
+      });
+    }
 
     // ===== ライブラリから選ぶ（captureなし） =====
-    pickBtn.addEventListener('click', () => {
-      fileInput.value = ''; // 同じ選択も拾えるように
-      fileInput.click();
-    });
-    fileInput.addEventListener('change', async (e) => {
+    pickBtn.addEventListener('click', () => { fileInput.value = ''; fileInput.click(); });
+    fileInput.addEventListener('change', (e) => {
       const file = e.target.files && e.target.files[0];
       if (!file) { setStatus('選択がキャンセルされました。'); return; }
-      if (!requireJPEG(file)) { currentFile = null; showFileInfo(null); return; }
-      currentFile = file;
-      showFileInfo(currentFile);
-      setStatus('ライブラリからJPEGを選択しました。POSTボタンで送信できます。', 'ok');
+      acceptFileOrBlock(file, 'ライブラリ/メニュー');
     });
 
     // ===== カメラ撮影（独自実装） =====
     camBtn.addEventListener('click', async () => {
       setStatus('カメラ起動中…（HTTPS必須）');
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setStatus('❌ このブラウザはカメラAPIに未対応です。', 'error'); return;
-      }
-      if (typeof ImageCapture === 'undefined') {
-        setStatus('❌ ImageCapture.takePhoto() に未対応です（Safari 18.4+ 推奨）。', 'error'); return;
-      }
+      if (!navigator.mediaDevices?.getUserMedia) { setStatus('❌ カメラAPIに未対応です。', 'error'); return; }
+      if (typeof ImageCapture === 'undefined') { setStatus('❌ takePhoto() に未対応（Safari 18.4+ 推奨）。', 'error'); return; }
       stopStream();
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal:'environment' } }, audio:false });
@@ -134,48 +180,37 @@
         const ic = new ImageCapture(track);
         setStatus('撮影中…');
         const blob = await ic.takePhoto(); // 端末設定により HEIC or JPEG
-
         stopStream();
 
-        // HEICの可能性あり → 今回はJPEG限定運用のため、HEICなら弾く
+        // JPEG限定運用：HEICなら拒否（必要ならHEIC→JPEG変換を後日追加）
         const type = blob.type || 'application/octet-stream';
         if (!/^image\/jpeg$/i.test(type)) {
-          currentFile = null;
-          showFileInfo(null);
-          setStatus('❌ この端末はHEICで撮影されています。iOSの「設定→カメラ→フォーマット」で互換性優先（JPEG）に変更してください。', 'error');
+          currentFile = null; showFileInfo(null); postBtn.disabled = true;
+          exifInfoEl.textContent = '—';
+          setStatus('❌ HEICが返されました。iOSの「設定→カメラ→フォーマット」で「互換性優先（JPEG）」に変更してください。', 'error');
           return;
         }
-
-        // 撮影結果を現在時刻のYYYYMMDDhhmmss.jpgで命名
         const name = `${yyyymmddhhmmss()}.jpg`;
         const file = new File([blob], name, { type: 'image/jpeg' });
-
-        currentFile = file;
-        showFileInfo(currentFile);
-        setStatus('カメラでJPEGを取得しました。POSTボタンで送信できます。', 'ok');
+        acceptFileOrBlock(file, 'ブラウザ撮影');
       } catch (err) {
         stopStream();
         setStatus(`撮影エラー: ${err?.message || err}`, 'error');
       }
     });
 
-    // ===== POST送信（手動のみ） =====
+    // ===== POST（手動のみ） =====
     postBtn.addEventListener('click', async () => {
       if (!currentFile) { setStatus('送信するファイルがありません。', 'error'); return; }
-      if (!requireJPEG(currentFile)) return;
-
-      setStatus('送信中…（ネットワーク/CORS設定に依存）');
+      setStatus('送信中…');
       postBtn.disabled = true;
       try {
         const fd = new FormData();
         fd.append(FIELD_NAME, currentFile, currentFile.name);
-        const res = await fetch(ENDPOINT, { method: 'POST', body: fd /* CORS要注意 */ });
+        const res = await fetch(ENDPOINT, { method: 'POST', body: fd });
         const text = await res.text().catch(()=> '');
-        if (res.ok) {
-          setStatus(`✅ 送信成功: ${res.status} ${res.statusText} / 応答: ${text.slice(0,200)}`, 'ok');
-        } else {
-          setStatus(`❌ 送信失敗: HTTP ${res.status} / 応答: ${text.slice(0,200)}`, 'error');
-        }
+        if (res.ok) setStatus(`✅ 送信成功: ${res.status} ${res.statusText} / 応答: ${text.slice(0,200)}`, 'ok');
+        else setStatus(`❌ 送信失敗: HTTP ${res.status} / 応答: ${text.slice(0,200)}`, 'error');
       } catch (err) {
         setStatus(`❌ 通信エラー（CORS/ネットワーク）: ${err?.message || err}`, 'error');
       } finally {
@@ -188,13 +223,16 @@
       currentFile = null;
       fileInput.value = '';
       showFileInfo(null);
+      exifInfoEl.textContent = '—';
       setStatus('クリアしました。');
       stopStream();
+      postBtn.disabled = true;
     });
 
     // 初期表示
     showFileInfo(null);
-    setStatus('ライブラリから選ぶ、またはカメラで撮影してください。');
+    exifInfoEl.textContent = '—';
+    setStatus('ライブラリから選ぶか、ブラウザのカメラで撮影してください。EXIFが無い画像はPOST不可です。');
   </script>
 </body>
 </html>
