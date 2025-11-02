@@ -3,193 +3,90 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Photo Library Uploader</title>
+  <title>Photo Capture (EXIF確認)</title>
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="manifest" href="./manifest.webmanifest">
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;margin:0;padding:24px;background:#fafafa;color:#111}
-    h1{font-size:20px;margin:0 0 12px}
     .card{background:#fff;border-radius:16px;box-shadow:0 4px 16px rgba(0,0,0,.06);padding:20px;margin:12px auto;max-width:700px}
-    .row{display:flex;gap:12px;flex-wrap:wrap}
-    button,a.btn{appearance:none;border:0;border-radius:12px;padding:14px 16px;font-size:16px;cursor:pointer;background:#111;color:#fff;text-decoration:none;display:inline-flex;align-items:center;gap:8px}
-    button.secondary,a.btn.secondary{background:#f0f0f0;color:#111}
-    button.ghost{background:transparent;border:1px solid #ddd;color:#111}
-    small, .muted{color:#666}
-    #guide p{margin:.5em 0}
-    #backChoice{display:inline-block;margin-top:8px}
-    img.qr{width:280px;height:auto;display:block;margin:24px auto 0}
-    .hidden{display:none !important}
+    button{appearance:none;border:0;border-radius:12px;padding:14px 16px;font-size:16px;cursor:pointer;background:#111;color:#fff}
+    small{color:#666}
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>画像アップロード（ショートカット連携）</h1>
-    <p class="muted">カメラのQRからSafariで開いた直後は、まず下のどちらかを選択してください。</p>
+    <h1>ブラウザで撮影してEXIFを確認</h1>
+    <p class="muted">ISO・F値・シャッタースピードがEXIFに含まれているかチェックします。</p>
 
-    <!-- ① 初回／既に導入済み 選択 -->
-    <div id="choice">
-      <div class="row">
-        <button id="btn-first" class="secondary">初めての方（ショートカット未導入）</button>
-        <button id="btn-installed">既に導入済み（すぐ実行）</button>
-      </div>
-      <p class="muted">※「初めて」を選ぶと、iCloudの「ショートカットを追加」に移動します。追加後、このページに戻ると自動的に実行を再試行します。</p>
-    </div>
-
-    <!-- ② 実行ボタン（導入済み向けUI） -->
-    <div id="runner" class="hidden">
-      <button id="pick">写真ライブラリから選ぶ（ショートカット）</button>
-<div style="margin-top:12px"></div>
-<button id="directUpload" class="secondary">画像ファイルを選んで直接アップロード（HTTP POST）</button>
-<input id="fileInput" type="file" accept="image/jpeg" class="hidden">
-      <a id="backChoice" href="#" class="btn ghost">← 選択に戻る</a>
-      <div><small id="installedBadge" class="muted"></small></div>
-<div><small id="status" class="muted"></small></div>
-    </div>
-
-    <!-- ③ ガイド（未導入向け案内 + 取得動線） -->
-    <div id="guide" class="hidden">
-      <p>初回はショートカットを追加してください。追加後はこのページに戻ると自動で実行を再試行します。</p>
-      <p><a id="shortcut-link" class="btn secondary" href="https://www.icloud.com/shortcuts/3a350e15a025402d80d1ff7ffac18853" target="_blank" rel="noopener noreferrer">ショートカットを追加</a></p>
-      <p><button id="retry" type="button" class="ghost">ショートカットを再実行</button></p>
-    </div>
-
-    <img class="qr" src="./QR_942906.png" alt="QRコード">
+    <button id="takePhoto">カメラで撮影</button>
+    <video id="camPreview" class="hidden" autoplay playsinline muted style="width:0;height:0"></video>
+    <div><small id="status" class="muted"></small></div>
   </div>
 
-  <script>
-  (function(){
-    // --- 定数 ---
-    const SHORTCUT_URL = 'https://www.icloud.com/shortcuts/3a350e15a025402d80d1ff7ffac18853';
-    const SHORTCUT_SCHEME = 'shortcuts://run-shortcut?name=%E6%92%AE%E5%BD%B1%E7%94%BB%E5%83%8F%E3%81%AE%E9%81%B8%E6%8A%9E';
-    const RETRY_KEY = 'shortcutRetryCount';
-    const HAS_KEY   = 'hasShortcutInstalled';
-    const MAX_RETRY = 2;
-    const FALLBACK_MS = 5000;
+  <script type="module">
+    import * as exifr from 'https://cdn.jsdelivr.net/npm/exifr/dist/lite.esm.js';
 
-    // --- 要素 ---
-    const choice = document.getElementById('choice');
-    const runner = document.getElementById('runner');
-    const guide  = document.getElementById('guide');
-    const btnFirst = document.getElementById('btn-first');
-    const btnInstalled = document.getElementById('btn-installed');
-    const pickBtn = document.getElementById('pick');
-    const retryBtn = document.getElementById('retry');
-    const backChoice = document.getElementById('backChoice');
-    const installedBadge = document.getElementById('installedBadge');
-    const shortcutLink = document.getElementById('shortcut-link');
+    const takeBtn  = document.getElementById('takePhoto');
+    const videoEl  = document.getElementById('camPreview');
+    const statusEl = document.getElementById('status');
 
-    shortcutLink.href = SHORTCUT_URL;
-
-    // --- ユーティリティ ---
-    function show(el){ el.classList.remove('hidden'); }
-    function hide(el){ el.classList.add('hidden'); }
-    function flagHasShortcut(v){
-      try{ localStorage.setItem(HAS_KEY, v ? '1':''); }catch(e){}
-    }
-    function hasShortcutFlag(){
-      try{ return localStorage.getItem(HAS_KEY) === '1'; }catch(e){ return false; }
-    }
-    function incRetry(){
-      try{
-        const n = Number(localStorage.getItem(RETRY_KEY) || '0');
-        if (n < MAX_RETRY) localStorage.setItem(RETRY_KEY, String(n + 1));
-      }catch(e){}
-    }
-    function decRetryAndGet(){
-      try{
-        const n = Number(localStorage.getItem(RETRY_KEY) || '0');
-        const m = Math.max(0, n - 1);
-        localStorage.setItem(RETRY_KEY, String(m));
-        return m;
-      }catch(e){ return 0; }
-    }
-    function resetRetry(){
-      try{ localStorage.removeItem(RETRY_KEY); }catch(e){}
+    function stopStream() {
+      try {
+        const s = videoEl.srcObject;
+        if (s) s.getTracks().forEach(t => t.stop());
+        videoEl.srcObject = null;
+      } catch {}
     }
 
-    function buildShortcutURL(){
-      const success = encodeURIComponent(`${location.origin}${location.pathname}?ok=1`);
-      const onErr   = encodeURIComponent(SHORTCUT_URL); // 失敗時：追加画面へ
-      const onCancel= encodeURIComponent(`${location.origin}${location.pathname}?cancel=1`);
-      return `${SHORTCUT_SCHEME}&x-success=${success}&x-error=${onErr}&x-cancel=${onCancel}`;
-    }
+    takeBtn.addEventListener('click', async () => {
+      if (!('mediaDevices' in navigator) || !navigator.mediaDevices.getUserMedia) {
+        statusEl.textContent = 'このブラウザはカメラAPIに未対応です。';
+        return;
+      }
+      if (typeof ImageCapture === 'undefined') {
+        statusEl.textContent = 'ImageCapture.takePhoto() に未対応のため撮影できません。Safari 18.4+ が必要です。';
+        return;
+      }
 
-    function navigateToAdd(){
-      // 案内表示＋次回復帰時の自動再試行セット
-      hide(choice); hide(runner); show(guide);
-      try{
-        const n = Number(localStorage.getItem(RETRY_KEY) || '0');
-        if (n < MAX_RETRY) localStorage.setItem(RETRY_KEY, String(n + 1));
-      }catch(e){}
-      location.href = SHORTCUT_URL;
-    }
+      statusEl.textContent = 'カメラ起動中…（ユーザー操作起点・HTTPS必須）';
+      stopStream();
 
-    function runShortcutWithFallback(){
-      const start = Date.now();
-      location.href = buildShortcutURL();
-      setTimeout(() => {
-        const stillHere = Date.now() - start > FALLBACK_MS && location.search.indexOf('ok=') === -1;
-        if (stillHere) navigateToAdd();
-      }, FALLBACK_MS);
-    }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: false
+        });
+        videoEl.srcObject = stream;
 
-    function maybeRetryAfterAdd(){
-      try{
-        const n = Number(localStorage.getItem(RETRY_KEY) || '0');
-        if (n > 0 && location.search.indexOf('ok=') === -1) {
-          localStorage.setItem(RETRY_KEY, String(n - 1));
-          setTimeout(runShortcutWithFallback, 400);
+        const [track] = stream.getVideoTracks();
+        const ic = new ImageCapture(track);
+
+        statusEl.textContent = '撮影中…';
+        const blob = await ic.takePhoto();   // ← ここが撮影箇所
+
+        const tags = await exifr.parse(blob, ['ISO','PhotographicSensitivity','FNumber','ExposureTime']);
+        const iso = tags?.ISO ?? tags?.PhotographicSensitivity ?? null;
+        const f   = tags?.FNumber ?? null;
+        const t   = tags?.ExposureTime ?? null;
+
+        let tStr = '—';
+        if (typeof t === 'number' && t > 0) {
+          const denom = Math.round(1 / t);
+          tStr = (denom >= 2) ? `1/${denom} (${t})` : `${t}`;
+        } else if (typeof t === 'string') {
+          tStr = t;
         }
-      }catch(e){}
-    }
 
-    // --- 起動時のURLパラメータ処理 ---
-    const url = new URL(location.href);
-    if (url.searchParams.get('ok') === '1') {
-      history.replaceState(null, '', location.pathname);
-      flagHasShortcut(true);
-      resetRetry();
-      alert('アップロード処理を受け付けました。');
-    }
-    if (url.searchParams.get('cancel') === '1') {
-      history.replaceState(null, '', location.pathname);
-      alert('ショートカットの実行がキャンセルされました。必要に応じて再試行してください。');
-    }
-
-    // --- 初期画面の出し分け ---
-    function showChoice(){
-      show(choice); hide(runner); hide(guide);
-    }
-    function showRunner(){
-      hide(choice); show(runner); hide(guide);
-      installedBadge.textContent = hasShortcutFlag() ? '導入済みとして記憶されています' : '';
-    }
-
-    if (hasShortcutFlag()) {
-      showRunner(); // 既に導入済みとして記憶 → 実行UIを優先表示
-    } else {
-      showChoice(); // 初回想定 → 選択を促す
-    }
-
-    // --- イベント ---
-    btnFirst.addEventListener('click', () => {
-      // 初めて → 取得フローへ
-      navigateToAdd();
+        if (iso || f || t) {
+          statusEl.textContent = `✅ EXIFあり：ISO=${iso ?? '—'} / F=${f ?? '—'} / シャッター=${tStr}`;
+        } else {
+          statusEl.textContent = '❌ EXIFに ISO・F値・シャッタースピード が見つかりませんでした。';
+        }
+      } catch (err) {
+        statusEl.textContent = `撮影エラー: ${err?.message || err}`;
+      } finally {
+        stopStream();
+      }
     });
-    btnInstalled.addEventListener('click', () => {
-      // 導入済み → 実行UIを表示
-      showRunner();
-    });
-    pickBtn.addEventListener('click', runShortcutWithFallback);
-    retryBtn.addEventListener('click', runShortcutWithFallback);
-    backChoice.addEventListener('click', (e)=>{ e.preventDefault(); showChoice(); });
-
-    // 復帰時の自動再試行
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') maybeRetryAfterAdd();
-    });
-    window.addEventListener('pageshow', maybeRetryAfterAdd, { once: false });
-  })();
   </script>
 </body>
 </html>
