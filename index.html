@@ -16,17 +16,22 @@
     .line{margin:6px 0}
     .error{color:#b00020}
     .ok{color:#0a7f2e}
+    .hidden{display:none !important}
     video{width:0;height:0}
+    img.qr{width:280px;height:auto;display:block;margin:24px auto 0}
   </style>
 </head>
 <body>
   <div class="card">
     <h1>画像アップロード（ライブラリ/カメラ）</h1>
-    <p class="muted">選んだJPEGだけを <strong>POSTボタン</strong> を押した時に送信します。ライブラリは <code>capture</code> なしで開きます。</p>
+    <p class="muted">選んだ <strong>JPEG</strong> だけを <strong>POSTボタン</strong> を押した時に送信します。ライブラリは <code>capture</code> なしで開きます。</p>
 
     <div class="row" role="group" aria-label="入力方法">
+      <!-- ライブラリ：capture を付けない -->
       <button id="pickFromLibrary" class="secondary">ライブラリから選ぶ</button>
-      <input id="libraryInput" type="file" accept="image/*" class="hidden" style="display:none">
+      <input id="libraryInput" type="file" accept="image/jpeg" class="hidden" style="display:none">
+
+      <!-- カメラ：独自実装（HTTPS必須） -->
       <button id="takePhoto">カメラで撮影（ブラウザ）</button>
       <video id="camPreview" autoplay playsinline muted></video>
     </div>
@@ -45,12 +50,15 @@
     </div>
 
     <p id="status" class="muted" style="margin-top:12px"></p>
+
+    <!-- ✅ QRコードは残します（iPhone でのアクセス導線用） -->
+    <img class="qr" src="./QR_942906.png" alt="QRコード">
   </div>
 
   <script type="module">
     // ===== 設定 =====
     const ENDPOINT = "https://ik1-127-70116.vs.sakura.ne.jp/markAnomaly"; // 送信先
-    const FIELD_NAME = "image";                                           // FormDataのフィールド名
+    const FIELD_NAME = "image";                                           // FormData のフィールド名
     const REQUIRE_JPEG_ONLY = true;                                       // JPEGのみ送信
 
     // ===== 要素参照 =====
@@ -103,7 +111,6 @@
     fileInput.addEventListener('change', async (e) => {
       const file = e.target.files && e.target.files[0];
       if (!file) { setStatus('選択がキャンセルされました。'); return; }
-      // そのままFileを採用（EXIF保持のためCanvas等は通さない）
       if (!requireJPEG(file)) { currentFile = null; showFileInfo(null); return; }
       currentFile = file;
       showFileInfo(currentFile);
@@ -126,15 +133,23 @@
         const [track] = stream.getVideoTracks();
         const ic = new ImageCapture(track);
         setStatus('撮影中…');
-        const blob = await ic.takePhoto(); // HEIC or JPEG
+        const blob = await ic.takePhoto(); // 端末設定により HEIC or JPEG
+
         stopStream();
 
-        // 撮影結果はBlob（無名）なので、ここで任意のファイル名を付けてFile化
-        // ※今回は現在時刻ベースの YYYYMMDDhhmmss.jpg
-        const name = `${yyyymmddhhmmss()}.jpg`;
-        const file = new File([blob], name, { type: blob.type || 'image/jpeg' });
+        // HEICの可能性あり → 今回はJPEG限定運用のため、HEICなら弾く
+        const type = blob.type || 'application/octet-stream';
+        if (!/^image\/jpeg$/i.test(type)) {
+          currentFile = null;
+          showFileInfo(null);
+          setStatus('❌ この端末はHEICで撮影されています。iOSの「設定→カメラ→フォーマット」で互換性優先（JPEG）に変更してください。', 'error');
+          return;
+        }
 
-        if (!requireJPEG(file)) { currentFile = null; showFileInfo(null); return; }
+        // 撮影結果を現在時刻のYYYYMMDDhhmmss.jpgで命名
+        const name = `${yyyymmddhhmmss()}.jpg`;
+        const file = new File([blob], name, { type: 'image/jpeg' });
+
         currentFile = file;
         showFileInfo(currentFile);
         setStatus('カメラでJPEGを取得しました。POSTボタンで送信できます。', 'ok');
